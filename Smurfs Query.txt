@@ -1,0 +1,110 @@
+
+
+
+select a.event_date, b.platform, b.continent, b.country, b.acquisition_channel, count(a.userid)users,
+count(distinct b.install_dt)Installs, count(distinct b.D1)D1, count(distinct b.D7)D7, count(distinct b.D14)D14, count(distinct b.D30)D30,
+count(distinct b.install_dt1)D1_Rolling, count(distinct b.install_dt7)D7_Rolling, count(distinct b.install_dt14)D14_Rolling,
+count(distinct b.install_dt30)D30_Rolling
+from
+	(
+	select distinct userid, date(eventtimestamp) event_date
+	from smurfs_db.public.game_log
+	where eventdate >= '2018-01-01'  and eventdate < '2019-01-01'
+	)a
+	left join 
+		(
+		select userid, install_date, platform, continent, country, acquisition_channel,
+		(case when retention_days = '0' then userid end) install_dt, 
+		case when retention_days = '1' then userid end D1, (case when retention_days >= '1' then userid end) install_dt1, 
+		case when retention_days = '7' then userid end D7, (case when retention_days >= '7' then userid end) install_dt7,
+		case when retention_days = '14' then userid end D14, (case when retention_days >= '14' then userid end) install_dt14,
+		case when retention_days = '30' then userid end D30, (case when retention_days >= '30' then userid end) install_dt30
+		from
+			(
+			select b.userid, b.platform, b.continent, b.country, 
+			case when b.acquisition_channel is null then 'none' else b.acquisition_channel end acquisition_channel, 
+			b.install_date, date(k.event_time)event_dt, datediff(day, date(b.install_date), date(k.event_time))retention_days
+				from
+						(
+						select j.userid, j.event_time
+						from
+							(
+							select distinct userid, date(eventtimestamp) event_time
+							from smurfs_db.public.game_log
+							where eventdate >= '2018-01-01'  and eventdate < '2019-01-01'
+							)j
+						)k
+				right join
+				--####
+				(
+					select y.userid, y.platform, y.continent, y.country, z.acquisition_channel, y.install_date
+					from
+						(
+						select distinct a.userid, a.install_date, a.platform, b.sub_region continent, b.country_name country
+						from
+							(
+							select distinct g.userid, (g.eventdate)install_date, g.event_time, g.gausercountry countrycode, 
+							case
+							when g.platform in ('ANDROID_MOBILE','ANDROID','ANDROID_TABLET') then 'android_device'
+							when g.platform in ('IOS_MOBILE','IOS','IOS_TABLET') then 'ios_device'
+							when g.platform = ('PC_CLIENT') then 'pc'
+							when g.platform = ('MAC_CLIENT') then 'mac' else 'unknown' end platform
+							from
+								(
+								select f.userid, f.eventdate, e.event_time, f.gausercountry, f.platform, count(1)
+								from smurfs_db.public.game_log f
+								right join 
+									(
+									 select distinct userid, min(eventtimestamp)event_time
+									 from smurfs_db.public.game_log
+									 where eventname = 'newPlayer'
+									 group by 1
+									)e
+								on f.userid = e.userid
+								and f.eventtimestamp = e.event_time
+								group by 1,2,3,4,5
+								)g
+							where event_time like '%'
+							)a
+							left join
+								(
+								 select *
+								 from smurfs_db.public.country
+								 )b
+							on a.countrycode = b.code
+							where a.install_date >= '2018-01-01' and a.install_date < '2019-01-01'
+							)y
+						left join
+							(
+							select g.userid, g.event_time,
+							case
+								when g.gauseracquisitionchannel like '%-Facebook%' then 'facebook'
+								when g.gauseracquisitionchannel like 'Facebook%' then 'facebook'
+								when g.gauseracquisitionchannel like 'None' then 'none'
+								when g.gauseracquisitionchannel like 'Apple%' then 'apple_search'
+								when g.gauseracquisitionchannel like 'Google%' then 'google'
+								when g.gauseracquisitionchannel like 'Instagram%' then 'instagram'
+								when g.gauseracquisitionchannel like 'AdAction%' then 'advert'
+								when g.gauseracquisitionchannel like 'AdColony%' then 'advert'
+								when g.gauseracquisitionchannel like 'Adwords%' then 'advert'
+								when g.gauseracquisitionchannel in ('Organic.','Organic') then 'organic'
+								else 'others' end acquisition_channel
+							from
+								(
+								 select distinct userid, date(eventtimestamp) event_time, gauseracquisitionchannel
+								 from smurfs_db.public.game_log
+								 where eventname = 'appsFlyerAttribution' or eventname = 'adjustAttribution'
+								)g
+							where g.event_time >= '2018-01-01' and g.event_time < '2019-01-01'
+							)z
+						on y.userid = z.userid
+						and y.install_date = z.event_time
+						)b
+					on b.userid = k.userid
+					group by 1,2,3,4,5,6,7
+					)
+				)b
+			on a.userid = b.userid
+			and a.event_date = b.install_date
+			group by 1,2,3,4,5
+			order by 1
